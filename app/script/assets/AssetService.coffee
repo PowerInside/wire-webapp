@@ -42,6 +42,8 @@ class z.assets.AssetService
 
     @pending_uploads = {}
 
+    @worker = new z.util.Worker 'worker/image-worker.js'
+
   ###############################################################################
   # REST API calls
   ###############################################################################
@@ -404,14 +406,8 @@ class z.assets.AssetService
     .then (buffer) =>
       if blob.type is 'image/gif'
         return z.util.load_file_buffer blob
-      return @_compress_worker buffer
+      return @worker.post buffer
     .then (compressed_bytes) ->
       return z.util.load_image new Blob [new Uint8Array compressed_bytes], 'type': blob.type
       .then (compressed_image) ->
         return [compressed_image, new Uint8Array compressed_bytes]
-
-  _compress_worker: (buffer) ->
-    return new Promise (resolve) ->
-      worker = new Worker 'worker/image-worker.js'
-      worker.onmessage = (event) -> resolve event.data
-      worker.postMessage buffer
