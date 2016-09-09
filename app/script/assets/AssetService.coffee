@@ -143,11 +143,11 @@ class z.assets.AssetService
         asset.set 'original', new z.proto.Asset.Original file.type, compressed_bytes.length, null, image_meta_data
         asset.set 'uploaded', new z.proto.Asset.RemoteData key_bytes, sha256, key, token
         return asset
-      .catch (error) =>
-        @logger.log @logger.levels.ERROR, error
-        asset = new z.proto.Asset()
-        asset.set 'not_uploaded', z.proto.Asset.NotUploaded.FAILED
-        return asset
+    .catch (error) =>
+      @logger.log @logger.levels.ERROR, error
+      asset = new z.proto.Asset()
+      asset.set 'not_uploaded', z.proto.Asset.NotUploaded.FAILED
+      return asset
 
   ###
   Generates the URL an asset can be downloaded from.
