@@ -67,11 +67,12 @@ class z.ViewModel.AuthViewModel
     @client_type = ko.observable z.client.ClientType.TEMPORARY
     @country_code = ko.observable ''
     @country = ko.observable ''
-    @phone_number = ko.observable ''
-    @email = ko.observable ''
     @name = ko.observable ''
     @password = ko.observable ''
     @persist = ko.observable if z.util.Environment.electron then true else false
+    @phone_number = ko.observable ''
+    @username = ko.observable ''
+
     @persist.subscribe (is_persistent) =>
       if is_persistent then @client_type z.client.ClientType.PERMANENT else z.client.ClientType.TEMPORARY
 
@@ -96,7 +97,7 @@ class z.ViewModel.AuthViewModel
     ]
     @code = ko.computed => return (digit() for digit in @code_digits()).join('').substr 0, 6
     @code.subscribe (code) =>
-      @_clear_errors() if code.length is 0
+      @_clear_errors() if not code.length
       @verify_code() if code.length is 6
     @phone_number_e164 = => return "#{@country_code()}#{@phone_number()}"
 
@@ -106,9 +107,9 @@ class z.ViewModel.AuthViewModel
     @code_expiration_in = ko.observable ''
     @code_expiration_timestamp.subscribe (timestamp) =>
       @code_expiration_in moment.unix(timestamp).fromNow()
-      @code_interval_id = setInterval =>
+      @code_interval_id = window.setInterval =>
         if timestamp <= z.util.get_unix_timestamp()
-          clearInterval @code_interval_id
+          window.clearInterval @code_interval_id
           return @code_expiration_timestamp 0
         @code_expiration_in moment.unix(timestamp).fromNow()
       , 20000
@@ -124,31 +125,34 @@ class z.ViewModel.AuthViewModel
     @accepted_terms_of_use.subscribe => @clear_error z.auth.AuthView.TYPE.TERMS
 
     @can_login_email = ko.computed =>
-      return not @disabled_by_animation() and @email().length isnt 0 and @password().length isnt 0
+      return not @disabled_by_animation() and @username().length and @password().length
 
     @can_login_phone = ko.computed =>
-      return not @disabled_by_animation() and @country_code().length > 1 and @phone_number().length isnt 0
+      return not @disabled_by_animation() and @country_code().length > 1 and @phone_number().length
 
     @can_register = ko.computed =>
-      return not @disabled_by_animation() and @email().length isnt 0 and @name().length isnt 0 and @password().length isnt 0
+      return not @disabled_by_animation() and @username().length and @name().length and @password().length and @accepted_terms_of_use()
 
     @can_resend_code = ko.computed =>
       return not @disabled_by_animation() and @code_expiration_timestamp() < z.util.get_unix_timestamp()
 
     @can_resend_registration = ko.computed =>
-      return not @disabled_by_animation() and @email().length isnt 0
+      return not @disabled_by_animation() and @username().length
 
     @can_resend_verification = ko.computed =>
-      return not @disabled_by_animation() and @email().length isnt 0
+      return not @disabled_by_animation() and @username().length
+
+    @can_verify_password = ko.computed =>
+      return not @disabled_by_animation() and @password().length
 
     @account_retry_text = ko.computed =>
       return z.localization.Localizer.get_text
         id: z.string.auth_posted_retry
-        replace: {placeholder: '%email', content: @email()}
+        replace: {placeholder: '%email', content: @username()}
     @account_resend_text = ko.computed =>
       return z.localization.Localizer.get_text
         id: z.string.auth_posted_resend
-        replace: {placeholder: '%email', content: @email()}
+        replace: {placeholder: '%email', content: @username()}
     @verify_code_text = ko.computed =>
       phone_number = PhoneFormat.formatNumberForMobileDialing('', @phone_number_e164()) or @phone_number_e164()
       return z.localization.Localizer.get_text
@@ -158,10 +162,6 @@ class z.ViewModel.AuthViewModel
       return z.localization.Localizer.get_text
         id: z.string.auth_verify_code_resend_timer
         replace: {placeholder: '%expiration', content: @code_expiration_in()}
-    @verify_email_headline = ko.computed =>
-      return z.localization.Localizer.get_text
-        id: z.string.auth_verify_email_headline
-        replace: {placeholder: '%name', content: @self_user()?.first_name()}
 
     @visible_section = ko.observable undefined
     @visible_mode = ko.observable undefined
@@ -171,7 +171,7 @@ class z.ViewModel.AuthViewModel
     @account_mode_login = ko.computed =>
       login_modes = [
         z.auth.AuthView.MODE.ACCOUNT_LOGIN
-        z.auth.AuthView.MODE.ACCOUNT_EMAIL
+        z.auth.AuthView.MODE.ACCOUNT_PASSWORD
         z.auth.AuthView.MODE.ACCOUNT_PHONE
       ]
       return @account_mode() in login_modes
@@ -218,16 +218,17 @@ class z.ViewModel.AuthViewModel
       z.auth.AuthView.MODE.POSTED_PENDING
       z.auth.AuthView.MODE.POSTED_RETRY
       z.auth.AuthView.MODE.POSTED_VERIFY
+      z.auth.AuthView.MODE.VERIFY_ACCOUNT
       z.auth.AuthView.MODE.VERIFY_CODE
-      z.auth.AuthView.MODE.VERIFY_ADD_EMAIL
+      z.auth.AuthView.MODE.VERIFY_PASSWORD
     ]
 
     if invite = z.util.get_url_parameter z.auth.URLParameter.INVITE
       @register_from_invite invite
     else if @_has_no_hash() and z.storage.get_value z.storage.StorageKey.AUTH.SHOW_LOGIN
       @_set_hash z.auth.AuthView.MODE.ACCOUNT_LOGIN
-    else if @_get_hash() in modes_to_block
-      @_set_hash()
+    #else if @_get_hash() in modes_to_block
+    #  @_set_hash()
     else
       @_on_hash_change()
 
@@ -235,7 +236,7 @@ class z.ViewModel.AuthViewModel
       .on 'hashchange', @_on_hash_change
       .on 'dragover drop', -> false
 
-    $("[id^='wire-login'], [id^='wire-mail'], [id^='wire-register'], [id^='wire-phone-code']").prevent_prefill()
+    $("[id^='wire-login'], [id^='wire-register'], [id^='wire-verify']").prevent_prefill()
 
     # Select country based on location of user IP
     @country_code (z.util.CountryCodes.get_country_code($('[name=geoip]').attr 'country') or 1).toString()
@@ -254,7 +255,7 @@ class z.ViewModel.AuthViewModel
       @registration_context = z.auth.AuthView.REGISTRATION_CONTEXT.PERSONAL_INVITE
       @name invite_info.name
       if invite_info.email
-        @email invite_info.email
+        @username invite_info.email
         @prefilled_email = invite_info.email
       else
         @logger.log @logger.levels.WARN, 'Invite information does not contain an email address'
@@ -286,7 +287,7 @@ class z.ViewModel.AuthViewModel
         {outcome: 'success'}
 
       # Track if the user changed the pre-filled email
-      if @prefilled_email is @email()
+      if @prefilled_email is @username()
         @auth.repository.get_access_token().then @_account_verified
       else
         @_set_hash z.auth.AuthView.MODE.POSTED
@@ -294,17 +295,17 @@ class z.ViewModel.AuthViewModel
       @pending_server_request false
     .catch (error) => @_on_register_error error
 
-  # Sign in using an email login.
-  sign_in_email: =>
-    return if @pending_server_request() or not @_validate_input z.auth.AuthView.MODE.ACCOUNT_EMAIL
+  # Sign in using a password login.
+  sign_in_password: =>
+    return if @pending_server_request() or not @_validate_input z.auth.AuthView.MODE.ACCOUNT_PASSWORD
 
     @pending_server_request true
-    payload = @_create_payload z.auth.AuthView.MODE.ACCOUNT_EMAIL
+    payload = @_create_payload z.auth.AuthView.MODE.ACCOUNT_PASSWORD
     @auth.repository.login payload, @persist()
     .then =>
       amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.LOGGED_IN,
         {
-          context: z.auth.AuthView.MODE.ACCOUNT_EMAIL
+          context: z.auth.AuthView.MODE.ACCOUNT_PASSWORD
           remember_me: @persist()
         }
       @_authentication_successful()
@@ -326,19 +327,22 @@ class z.ViewModel.AuthViewModel
   sign_in_phone: =>
     return if @pending_server_request() or not @_validate_input z.auth.AuthView.MODE.ACCOUNT_PHONE
 
-    @pending_server_request true
-    payload = @_create_payload z.auth.AuthView.MODE.ACCOUNT_PHONE
-    @auth.repository.request_login_code payload
-    .then (response) =>
-      clearInterval @code_interval_id
+    _on_code_request_success = (response) =>
+      window.clearInterval @code_interval_id
       if response.expires_in
         @code_expiration_timestamp z.util.get_unix_timestamp() + response.expires_in
       else if not response.label
         @code_expiration_timestamp z.util.get_unix_timestamp() + z.config.LOGIN_CODE_EXPIRATION
       @_set_hash z.auth.AuthView.MODE.VERIFY_CODE
       @pending_server_request false
+
+    @pending_server_request true
+    payload = @_create_payload z.auth.AuthView.MODE.ACCOUNT_PHONE
+    @auth.repository.request_login_code payload
+    .then (response) ->
       event = new z.tracking.event.PhoneVerification 'signIn', 'succeeded', undefined
       amplify.publish z.event.WebApp.ANALYTICS.EVENT, event.name, event.attributes
+      _on_code_request_success response
     .catch (error) =>
       @pending_server_request false
       if navigator.onLine
@@ -346,7 +350,7 @@ class z.ViewModel.AuthViewModel
           when z.service.BackendClientError::LABEL.PENDING_LOGIN
             return _on_code_request_success error
           when z.service.BackendClientError::LABEL.PASSWORD_EXISTS
-            @_add_error z.string.auth_error_misc
+            return @_set_hash z.auth.AuthView.MODE.VERIFY_PASSWORD
           when z.service.BackendClientError::LABEL.INVALID_PHONE
             @_add_error z.string.auth_error_phone_number_unknown, z.auth.AuthView.TYPE.PHONE
           else
@@ -357,33 +361,9 @@ class z.ViewModel.AuthViewModel
       event = new z.tracking.event.PhoneVerification 'signIn', 'error', error?.label
       amplify.publish z.event.WebApp.ANALYTICS.EVENT, event.name, event.attributes
 
-  # Verify the security code on phone number login.
-  verify_code: =>
-    return if @pending_server_request() or not @_validate_code()
-
-    @pending_server_request true
-    payload = @_create_payload z.auth.AuthView.MODE.VERIFY_CODE
-    @auth.repository.login payload, @persist()
-    .then =>
-      amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.LOGGED_IN,
-        {
-          context: z.auth.AuthView.MODE.ACCOUNT_EMAIL
-          remember_me: @persist()
-        }
-      event = new z.tracking.event.PhoneVerification 'postLogin', 'succeeded', undefined
-      amplify.publish z.event.WebApp.ANALYTICS.EVENT, event.name, event.attributes
-      @_authentication_successful()
-    .catch (error) =>
-      if @validation_errors().length is 0
-        @_add_error z.string.auth_error_code, z.auth.AuthView.TYPE.CODE
-        @_has_errors()
-      @pending_server_request false
-      event = new z.tracking.event.PhoneVerification 'postLogin', 'error', error.label
-      amplify.publish z.event.WebApp.ANALYTICS.EVENT, event.name, event.attributes
-
   # Add an email on phone number login.
-  verify_add_email: =>
-    return if @pending_server_request() or not @_validate_input z.auth.AuthView.MODE.VERIFY_ADD_EMAIL
+  verify_account: =>
+    return if @pending_server_request() or not @_validate_input z.auth.AuthView.MODE.VERIFY_ACCOUNT
 
     @pending_server_request true
     @user_service.change_own_password @password()
@@ -392,7 +372,7 @@ class z.ViewModel.AuthViewModel
       return error
     .then (error) =>
       if not error? or error.code is z.service.BackendClientError::STATUS_CODE.FORBIDDEN
-        @user_service.change_own_email @email()
+        @user_service.change_own_email @username()
       else
         @pending_server_request false
         return @_has_errors()
@@ -413,6 +393,58 @@ class z.ViewModel.AuthViewModel
             @_add_error z.string.auth_error_email_malformed, z.auth.AuthView.TYPE.EMAIL
         @_has_errors()
 
+  # Verify the security code on phone number login.
+  verify_code: =>
+    return if @pending_server_request() or not @_validate_code()
+
+    @pending_server_request true
+    payload = @_create_payload z.auth.AuthView.MODE.VERIFY_CODE
+    @auth.repository.login payload, @persist()
+    .then =>
+      amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.LOGGED_IN,
+        {
+          context: z.auth.AuthView.MODE.ACCOUNT_PHONE
+          remember_me: @persist()
+        }
+      event = new z.tracking.event.PhoneVerification 'postLogin', 'succeeded', undefined
+      amplify.publish z.event.WebApp.ANALYTICS.EVENT, event.name, event.attributes
+      @_authentication_successful()
+    .catch (error) =>
+      if not @validation_errors().length
+        @_add_error z.string.auth_error_code, z.auth.AuthView.TYPE.CODE
+        @_has_errors()
+      @pending_server_request false
+      event = new z.tracking.event.PhoneVerification 'postLogin', 'error', error.label
+      amplify.publish z.event.WebApp.ANALYTICS.EVENT, event.name, event.attributes
+
+  # Log in with phone number and password.
+  verify_password: =>
+    return if @pending_server_request() or not @_validate_input z.auth.AuthView.MODE.VERIFY_PASSWORD
+
+    @pending_server_request true
+    payload = @_create_payload z.auth.AuthView.MODE.VERIFY_PASSWORD
+    @auth.repository.login payload, @persist()
+    .then =>
+      amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.LOGGED_IN,
+        {
+          context: z.auth.AuthView.MODE.VERIFY_PASSWORD
+          remember_me: @persist()
+        }
+      @_authentication_successful()
+    .catch (error) =>
+      @pending_server_request false
+      $('#wire-verify-password').focus()
+      if navigator.onLine
+        if error.label is z.service.BackendClientError::LABEL.PENDING_ACTIVATION
+          return @_set_hash z.auth.AuthView.MODE.POSTED_PENDING
+        else if error.label
+          @_add_error z.string.auth_error_sign_in, z.auth.AuthView.TYPE.PASSWORD
+        else
+          @_add_error z.string.auth_error_misc
+      else
+        @_add_error z.string.auth_error_offline
+      @_has_errors()
+
   ###
   Create the backend call payload.
 
@@ -420,38 +452,47 @@ class z.ViewModel.AuthViewModel
   @private
   ###
   _create_payload: (mode) =>
-    email = @email().trim().toLowerCase()
+    username = @username().trim().toLowerCase()
 
     switch mode
-      when z.auth.AuthView.MODE.ACCOUNT_REGISTER
+      when z.auth.AuthView.MODE.ACCOUNT_PASSWORD
         payload =
-          email: email
+          label: @client_repository.construct_cookie_label username, @client_type()
+          label_key: @client_repository.construct_cookie_label_key username, @client_type()
+          password: @password()
+
+        if username.includes('@') then payload.email = username else payload.phone = username
+
+        return payload
+      when z.auth.AuthView.MODE.ACCOUNT_PHONE
+        return {} =
+          force: false
+          phone: @phone_number_e164()
+      when z.auth.AuthView.MODE.ACCOUNT_REGISTER
+        return {} =
+          email: username
           invitation_code: z.util.get_url_parameter z.auth.URLParameter.INVITE
-          label: @client_repository.construct_cookie_label email, @client_type()
-          label_key: @client_repository.construct_cookie_label_key email, @client_type()
+          label: @client_repository.construct_cookie_label username, @client_type()
+          label_key: @client_repository.construct_cookie_label_key username, @client_type()
           locale: moment.locale()
           name: @name().trim()
           password: @password()
-        return payload
-      when z.auth.AuthView.MODE.ACCOUNT_EMAIL
-        payload =
-          email: email
-          label: @client_repository.construct_cookie_label email, @client_type()
-          label_key: @client_repository.construct_cookie_label_key email, @client_type()
-          password: @password()
-        return payload
-      when z.auth.AuthView.MODE.ACCOUNT_PHONE then return {} =
-        force: false
-        phone: @phone_number_e164()
-      when z.auth.AuthView.MODE.POSTED_RESEND then return {} =
-        email: email
+      when z.auth.AuthView.MODE.POSTED_RESEND
+        return {} =
+          email: username
       when z.auth.AuthView.MODE.VERIFY_CODE
-        payload =
+        return {} =
           code: @code()
           label: @client_repository.construct_cookie_label @phone_number_e164(), @client_type()
           label_key: @client_repository.construct_cookie_label_key @phone_number_e164(), @client_type()
           phone: @phone_number_e164()
-        return payload
+      when z.auth.AuthView.MODE.VERIFY_PASSWORD
+        return {} =
+          label: @client_repository.construct_cookie_label @phone_number_e164(), @client_type()
+          label_key: @client_repository.construct_cookie_label_key @phone_number_e164(), @client_type()
+          password: @password()
+          phone: @phone_number_e164()
+
 
   ###############################################################################
   # Events
@@ -478,7 +519,7 @@ class z.ViewModel.AuthViewModel
   changed_phone_number: =>
     input_value = @phone_number()
     @phone_number (@phone_number().match(/\d+/g))?.join('') or ''
-    if @phone_number().length is 0 and input_value.length > 0
+    if input_value.length and not @phone_number().length
       @_add_error z.string.auth_error_phone_number_invalid, z.auth.AuthView.TYPE.PHONE
 
   clear_error: (mode, event) => @_remove_error event?.currentTarget.classList[1] or mode
@@ -486,7 +527,7 @@ class z.ViewModel.AuthViewModel
   clear_error_password: (view_model, event) ->
     return if event.keyCode is z.util.KEYCODE.ENTER
     @failed_validation_password false
-    if event.currentTarget.value.length is 0 or event.currentTarget.value.length >= 8
+    if not event.currentTarget.value.length or event.currentTarget.value.length >= 8
       @_remove_error event.currentTarget.classList[1]
 
   clicked_on_change_email: => @_set_hash z.auth.AuthView.MODE.ACCOUNT_REGISTER
@@ -497,7 +538,7 @@ class z.ViewModel.AuthViewModel
     @_set_hash z.auth.AuthView.MODE.ACCOUNT_LOGIN
     $('#wire-login-phone').focus_field() if @visible_method() is z.auth.AuthView.MODE.ACCOUNT_PHONE
 
-  clicked_on_login_email: => @_set_hash z.auth.AuthView.MODE.ACCOUNT_EMAIL
+  clicked_on_login_password: => @_set_hash z.auth.AuthView.MODE.ACCOUNT_PASSWORD
 
   clicked_on_login_phone: => @_set_hash z.auth.AuthView.MODE.ACCOUNT_PHONE
 
@@ -529,12 +570,12 @@ class z.ViewModel.AuthViewModel
 
     if not @pending_server_request()
       @pending_server_request true
-      @user_service.change_own_email @email()
+      @user_service.change_own_email @username()
       .then (response) => @_on_resend_success response
       .catch =>
         @pending_server_request false
         $('.icon-spinner').fadeOut()
-        setTimeout =>
+        window.setTimeout =>
           $('.icon-error').fadeIn()
           @disabled_by_animation false
         , TIMEOUT.SHORT
@@ -571,21 +612,21 @@ class z.ViewModel.AuthViewModel
     switch event.keyCode
       when z.util.KEYCODE.ARROW_LEFT, z.util.KEYCODE.ARROW_UP
         focus_digit = target_digit - 1
-        $("#wire-phone-code-digit-#{Math.max 1, focus_digit}").focus()
+        $("#wire-verify-code-digit-#{Math.max 1, focus_digit}").focus()
       when z.util.KEYCODE.ARROW_DOWN, z.util.KEYCODE.ARROW_RIGHT
         focus_digit = target_digit + 1
-        $("#wire-phone-code-digit-#{Math.min 6, focus_digit}").focus()
+        $("#wire-verify-code-digit-#{Math.min 6, focus_digit}").focus()
       when z.util.KEYCODE.BACKSPACE, z.util.KEYCODE.DELETE
         if event.currentTarget.value is ''
           focus_digit = target_digit - 1
-          $("#wire-phone-code-digit-#{Math.max 1, focus_digit}").focus()
+          $("#wire-verify-code-digit-#{Math.max 1, focus_digit}").focus()
         return true
       else
         char = String.fromCharCode(event.keyCode).match(/\d+/g) or String.fromCharCode(event.keyCode - 48).match /\d+/g
         if char
           @code_digits()[target_digit - 1] char
           focus_digit = target_digit + 1
-          $("#wire-phone-code-digit-#{Math.min 6, focus_digit}").focus()
+          $("#wire-verify-code-digit-#{Math.min 6, focus_digit}").focus()
 
   input_phone_code: (view_model, event) =>
     target_id = event.currentTarget.id
@@ -637,7 +678,7 @@ class z.ViewModel.AuthViewModel
       when z.service.BackendClientError::LABEL.BLACKLISTED_EMAIL, z.service.BackendClientError::LABEL.UNAUTHORIZED
         @_add_error z.string.auth_error_email_forbidden, z.auth.AuthView.TYPE.EMAIL
       when z.service.BackendClientError::LABEL.KEY_EXISTS
-        payload = @_create_payload z.auth.AuthView.MODE.ACCOUNT_EMAIL
+        payload = @_create_payload z.auth.AuthView.MODE.ACCOUNT_PASSWORD
         @auth.repository.login payload, @persist()
         .then =>
           amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.LOGGED_IN,
@@ -667,7 +708,7 @@ class z.ViewModel.AuthViewModel
   _on_resend_error: (error) =>
     @pending_server_request false
     $('.icon-spinner').fadeOut()
-    setTimeout =>
+    window.setTimeout =>
       $('.icon-error').fadeIn()
       @_on_register_error error
       @disabled_by_animation false
@@ -676,11 +717,11 @@ class z.ViewModel.AuthViewModel
   _on_resend_success: =>
     @pending_server_request false
     $('.icon-spinner').fadeOut()
-    setTimeout =>
+    window.setTimeout =>
       $('.icon-check').fadeIn()
       @posted_mode z.auth.AuthView.MODE.POSTED_RESEND if @posted_mode() is z.auth.AuthView.MODE.POSTED_RETRY
     , TIMEOUT.SHORT
-    setTimeout =>
+    window.setTimeout =>
       $('.icon-check').fadeOut()
       $('.icon-envelope').fadeIn()
       @disabled_by_animation false
@@ -707,33 +748,24 @@ class z.ViewModel.AuthViewModel
   # Views and Navigation
   ###############################################################################
 
-  show_account_register: (focus = 'wire-register-name') ->
-    switch_params =
-      section: z.auth.AuthView.SECTION.ACCOUNT
-      mode: z.auth.AuthView.MODE.ACCOUNT_REGISTER
-      focus: focus
-    @switch_ui switch_params
-    amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.REGISTRATION.OPENED_EMAIL_SIGN_UP,
-      {context: @registration_context}
-
-  show_account_email: ->
-    switch_params =
-      section: z.auth.AuthView.SECTION.ACCOUNT
-      mode: z.auth.AuthView.MODE.ACCOUNT_LOGIN
-      method: z.auth.AuthView.MODE.ACCOUNT_EMAIL
-      focus: 'wire-login-email'
-    @switch_ui switch_params
-    amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.OPENED_LOGIN,
-      {context: z.auth.AuthView.MODE.ACCOUNT_EMAIL}
-
   show_account_login: =>
     switch_params =
       section: z.auth.AuthView.SECTION.ACCOUNT
       mode: z.auth.AuthView.MODE.ACCOUNT_LOGIN
-      focus: 'wire-login-email'
+      focus: 'wire-login-user'
     @switch_ui switch_params
     amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.OPENED_LOGIN,
       {context: @visible_method()}
+
+  show_account_password: ->
+    switch_params =
+      section: z.auth.AuthView.SECTION.ACCOUNT
+      mode: z.auth.AuthView.MODE.ACCOUNT_LOGIN
+      method: z.auth.AuthView.MODE.ACCOUNT_PASSWORD
+      focus: 'wire-login-user'
+    @switch_ui switch_params
+    amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.OPENED_LOGIN,
+      {context: z.auth.AuthView.MODE.ACCOUNT_PASSWORD}
 
   show_account_phone: ->
     switch_params =
@@ -745,21 +777,39 @@ class z.ViewModel.AuthViewModel
     amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.ACCOUNT.OPENED_LOGIN,
       {context: z.auth.AuthView.MODE.ACCOUNT_PHONE}
 
+  show_account_register: (focus = 'wire-register-name') ->
+    switch_params =
+      section: z.auth.AuthView.SECTION.ACCOUNT
+      mode: z.auth.AuthView.MODE.ACCOUNT_REGISTER
+      focus: focus
+    @switch_ui switch_params
+    amplify.publish z.event.WebApp.ANALYTICS.EVENT, z.tracking.EventName.REGISTRATION.OPENED_EMAIL_SIGN_UP,
+      {context: @registration_context}
+
+  show_verify_account: ->
+    switch_params =
+      section: z.auth.AuthView.SECTION.VERIFY
+      mode: z.auth.AuthView.MODE.VERIFY_ACCOUNT
+      focus: 'wire-verify-account-email'
+    @switch_ui switch_params
+
   show_verify_code: =>
-    if not z.util.is_valid_phone_number @phone_number_e164()
-      return @_set_hash z.auth.AuthView.MODE.ACCOUNT_PHONE
+    #if not z.util.is_valid_phone_number @phone_number_e164()
+    #  return @_set_hash z.auth.AuthView.MODE.ACCOUNT_PHONE
     switch_params =
       section: z.auth.AuthView.SECTION.VERIFY
       mode: z.auth.AuthView.MODE.VERIFY_CODE
-      focus: 'wire-phone-code-digit-1'
+      focus: 'wire-verify-code-digit-1'
     @switch_ui switch_params
     $('#wire-phone-code-digit-1').focus()
 
-  show_verify_mail: ->
+  show_verify_password: ->
+    #if not z.util.is_valid_phone_number @phone_number_e164()
+    #  return @_set_hash z.auth.AuthView.MODE.ACCOUNT_PHONE
     switch_params =
       section: z.auth.AuthView.SECTION.VERIFY
-      mode: z.auth.AuthView.TYPE.EMAIL
-      focus: 'wire-mail-email'
+      mode: z.auth.AuthView.MODE.VERIFY_PASSWORD
+      focus: 'wire-verify-password-input'
     @switch_ui switch_params
 
   show_posted_offline: ->
@@ -855,8 +905,8 @@ class z.ViewModel.AuthViewModel
       @_shift_ui animation_params
 
     if not switch_params.method and not @visible_method()
-      @_show_method z.auth.AuthView.MODE.ACCOUNT_EMAIL
-      @visible_method z.auth.AuthView.MODE.ACCOUNT_EMAIL
+      @_show_method z.auth.AuthView.MODE.ACCOUNT_PASSWORD
+      @visible_method z.auth.AuthView.MODE.ACCOUNT_PASSWORD
     else if switch_params.method and @visible_method() isnt switch_params.method
       @_show_method switch_params.method
       @visible_method switch_params.method
@@ -891,7 +941,7 @@ class z.ViewModel.AuthViewModel
         opacity: ''
       new_component.css opacity: 1
       _change_visible()
-    else if old_component.length is 0
+    else if not old_component.length
       @disabled_by_animation true
 
       requestAnimFrame =>
@@ -984,10 +1034,12 @@ class z.ViewModel.AuthViewModel
   _on_hash_change: =>
     @_clear_errors()
     switch @_get_hash()
-      when z.auth.AuthView.MODE.ACCOUNT_EMAIL then @show_account_email()
       when z.auth.AuthView.MODE.ACCOUNT_LOGIN then @show_account_login()
+      when z.auth.AuthView.MODE.ACCOUNT_PASSWORD then @show_account_password()
+      when z.auth.AuthView.MODE.ACCOUNT_PHONE then @show_account_phone()
+      when z.auth.AuthView.MODE.VERIFY_ACCOUNT then @show_verify_account()
       when z.auth.AuthView.MODE.VERIFY_CODE then @show_verify_code()
-      when z.auth.AuthView.MODE.VERIFY_ADD_EMAIL then @show_verify_mail()
+      when z.auth.AuthView.MODE.VERIFY_PASSWORD then @show_verify_password()
       when z.auth.AuthView.MODE.POSTED then @show_posted_resend()
       when z.auth.AuthView.MODE.POSTED_OFFLINE then @show_posted_offline()
       when z.auth.AuthView.MODE.POSTED_PENDING then @show_posted_pending()
@@ -1082,10 +1134,13 @@ class z.ViewModel.AuthViewModel
   Validate email input.
   @private
   ###
-  _validate_email: ->
-    if @email().length is 0
+  _validate_email: (mode) ->
+    if not @username().length
       @_add_error z.string.auth_error_email_missing, z.auth.AuthView.TYPE.EMAIL
-    else if not z.util.is_valid_email @email()
+    else if mode is z.auth.AuthView.MODE.ACCOUNT_PASSWORD
+      if not z.util.is_valid_email(@username()) and not z.util.is_valid_phone_number @username()
+        @_add_error z.string.auth_error_email_malformed, z.auth.AuthView.TYPE.EMAIL
+    else if not z.util.is_valid_email @username()
       @_add_error z.string.auth_error_email_malformed, z.auth.AuthView.TYPE.EMAIL
 
   ###
@@ -1098,23 +1153,28 @@ class z.ViewModel.AuthViewModel
   _validate_input: (mode) ->
     @_clear_errors()
 
-    if mode is z.auth.AuthView.MODE.ACCOUNT_REGISTER
-      @_validate_name()
+    @_validate_name() if mode is z.auth.AuthView.MODE.ACCOUNT_REGISTER
 
-    email_and_password_modes = [
-      z.auth.AuthView.MODE.ACCOUNT_EMAIL
+    email_modes = [
+      z.auth.AuthView.MODE.ACCOUNT_PASSWORD
       z.auth.AuthView.MODE.ACCOUNT_REGISTER
-      z.auth.AuthView.MODE.VERIFY_ADD_EMAIL
+      z.auth.AuthView.MODE.VERIFY_ACCOUNT
     ]
-    if mode in email_and_password_modes
-      @_validate_email()
-      @_validate_password mode
+    @_validate_email mode if mode in email_modes
 
-    if mode is z.auth.AuthView.MODE.ACCOUNT_PHONE
-      @_validate_phone()
+    password_modes = [
+      z.auth.AuthView.MODE.ACCOUNT_PASSWORD
+      z.auth.AuthView.MODE.ACCOUNT_REGISTER
+      z.auth.AuthView.MODE.VERIFY_ACCOUNT
+      z.auth.AuthView.MODE.VERIFY_PASSWORD
+    ]
+    @_validate_password mode if mode in password_modes
 
-    if mode is z.auth.AuthView.MODE.ACCOUNT_REGISTER
-      @_validate_terms_of_use()
+    phone_modes = [
+      z.auth.AuthView.MODE.ACCOUNT_PHONE
+      z.auth.AuthView.MODE.VERIFY_PASSWORD
+    ]
+    @_validate_phone() if mode in phone_modes
 
     return not @_has_errors()
 
@@ -1133,7 +1193,7 @@ class z.ViewModel.AuthViewModel
   ###
   _validate_password: (mode) ->
     if @password().length < z.config.MINIMUM_PASSWORD_LENGTH
-      if mode is z.auth.AuthView.MODE.ACCOUNT_EMAIL
+      if mode is z.auth.AuthView.MODE.ACCOUNT_PASSWORD
         return @_add_error z.string.auth_error_password_wrong, z.auth.AuthView.TYPE.PASSWORD
       @_add_error z.string.auth_error_password_short, z.auth.AuthView.TYPE.PASSWORD
 
@@ -1144,14 +1204,6 @@ class z.ViewModel.AuthViewModel
   _validate_phone: ->
     if not z.util.is_valid_phone_number(@phone_number_e164()) and z.util.Environment.backend.current is 'production'
       @_add_error z.string.auth_error_phone_number_invalid, z.auth.AuthView.TYPE.PHONE
-
-  ###
-  Validate terms of use.
-  @private
-  ###
-  _validate_terms_of_use: ->
-    if not @accepted_terms_of_use()
-      @_add_error z.string.auth_error_terms_of_use, z.auth.AuthView.TYPE.TERMS
 
 
   ###############################################################################
@@ -1232,7 +1284,7 @@ class z.ViewModel.AuthViewModel
             resolve @self_user()
           .catch (error) -> reject error
         else
-          @_set_hash z.auth.AuthView.MODE.VERIFY_ADD_EMAIL
+          @_set_hash z.auth.AuthView.MODE.VERIFY_ACCOUNT
 
   ###
   Redirects to the app after successful login
@@ -1301,7 +1353,7 @@ $.fn.extend
   focus_field: ->
     @each ->
       # Timeout needed (for Chrome): http://stackoverflow.com/a/17384592/451634
-      setTimeout =>
+      window.setTimeout =>
         $(@).focus()
       , 0
 
