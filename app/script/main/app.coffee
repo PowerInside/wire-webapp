@@ -28,6 +28,8 @@ class z.main.App
   constructor: (@auth) ->
     @logger = new z.util.Logger 'z.main.App', z.config.LOGGER.OPTIONS
 
+    @enable_debugging()
+
     @telemetry = new z.telemetry.app_init.AppInitTelemetry()
     @window_handler = new z.ui.WindowHandler().init()
 
