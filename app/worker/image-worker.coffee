@@ -2,6 +2,7 @@ importScripts 'jimp.min.js'
 
 MAX_SIZE = 1448
 MAX_FILE_SIZE = 5 * 1024
+COMPRESSION = 75
 
 self.addEventListener 'message', (e) ->
   data = e.data
@@ -12,7 +13,7 @@ self.addEventListener 'message', (e) ->
       image.scaleToFit MAX_SIZE, MAX_SIZE
 
     if image.bitmap.data.length > MAX_FILE_SIZE
-      image.quality 75
+      image.quality COMPRESSION
 
     image.getBuffer Jimp.AUTO, (err, src) ->
       self.postMessage
