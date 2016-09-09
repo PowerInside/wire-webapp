@@ -21,6 +21,8 @@ z.util ?= {}
 
 class z.util.Worker
   constructor: (uri) ->
+
+    return
     worker = new window.Worker uri
     worker.onmessage = (event) ->
       data = event.data
