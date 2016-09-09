@@ -31,7 +31,7 @@ class z.assets.AssetService
     @rotator = new zeta.webapp.module.image.rotation.ImageFileRotator()
     @compressor = new zeta.webapp.module.image.ImageCompressor()
 
-    @worker = new z.util.Worker 'worker/image-worker.js'
+    @image_worker = new z.util.Worker 'worker/image-worker.js'
 
     @BOUNDARY = 'frontier'
 
@@ -406,7 +406,7 @@ class z.assets.AssetService
     .then (buffer) =>
       if blob.type is 'image/gif'
         return z.util.load_file_buffer blob
-      return @worker.post buffer
+      return @image_worker.post buffer
     .then (compressed_bytes) ->
       return z.util.load_image new Blob [new Uint8Array compressed_bytes], 'type': blob.type
       .then (compressed_image) ->
