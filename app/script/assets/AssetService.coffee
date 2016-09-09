@@ -28,8 +28,10 @@ class z.assets.AssetService
   ###
   constructor: (@client) ->
     @logger = new z.util.Logger 'z.assets.AssetService', z.config.LOGGER.OPTIONS
-    @compressor = new zeta.webapp.module.image.ImageCompressor()
     @rotator = new zeta.webapp.module.image.rotation.ImageFileRotator()
+    @compressor = new zeta.webapp.module.image.ImageCompressor()
+
+    @worker = new z.util.Worker 'worker/image-worker.js'
 
     @BOUNDARY = 'frontier'
 
@@ -41,8 +43,6 @@ class z.assets.AssetService
       compression: 0.7
 
     @pending_uploads = {}
-
-    @worker = new z.util.Worker 'worker/image-worker.js'
 
   ###############################################################################
   # REST API calls
